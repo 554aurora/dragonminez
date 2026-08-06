@@ -1,14 +1,13 @@
 name: Combat Rework Build Artifact
 
 on:
+  workflow_dispatch: {}
   push:
     branches:
-      - main
-      - agent/combat-rework
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch: {}
+      - agent/combat-addon
+    paths:
+      - 'dmz-combat-addon/**'
+      - '.github/workflows/combat-rework-build.yml'
 
 permissions:
   contents: read
@@ -16,50 +15,35 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@v6
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17 Temurin
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: temurin
+          cache: gradle
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          cache-read-only: false
-
-      - name: Enable dependency downloads on the clean runner
-        shell: bash
-        run: sed -i 's/^org.gradle.offline=true$/org.gradle.offline=false/' gradle.properties
-
-      - name: Build distributable jar
+      - name: Build standalone addon
         shell: bash
         run: |
           chmod +x ./gradlew
-          ./gradlew build --build-cache
+          ./gradlew -p dmz-combat-addon clean build --no-daemon --stacktrace
 
-      - name: Resolve distributable jar
-        id: artifact
+      - name: Verify installable JAR
         shell: bash
         run: |
-          set -euo pipefail
-          version="$(grep '^mod_version=' gradle.properties | cut -d= -f2-)"
-          jar="build/libs/dragonminez-${version}.jar"
-          test -f "$jar"
-          echo "jar=$jar" >> "$GITHUB_OUTPUT"
-          sha256sum "$jar"
+          test -f dmz-combat-addon/build/libs/dmzcombataddon-1.0.0.jar
+          sha256sum dmz-combat-addon/build/libs/dmzcombataddon-1.0.0.jar
 
-      - name: Upload installable jar
+      - name: Upload installable addon JAR
         uses: actions/upload-artifact@v4
         with:
-          name: dragonminez-combat-rework
-          path: ${{ steps.artifact.outputs.jar }}
+          name: dmzcombataddon-1.0.0
+          path: dmz-combat-addon/build/libs/dmzcombataddon-1.0.0.jar
           if-no-files-found: error
           retention-days: 7
