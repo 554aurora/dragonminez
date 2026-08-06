@@ -5,6 +5,7 @@ import com.dragonminez.LogUtil;
 import com.dragonminez.Reference;
 import com.dragonminez.common.combat.logic.weapon.WeaponRegistry;
 import com.dragonminez.common.combat.util.Player_DMZ;
+import com.dragonminez.common.combat.player.HeavyAttackConstants;
 import com.dragonminez.common.combat.util.SoundHelper;
 import com.dragonminez.common.config.ConfigManager;
 import com.dragonminez.common.events.DMZEvent;
@@ -172,6 +173,12 @@ public class CombatEvent {
 					}
 				}
 
+				boolean isHeavyAttack = attacker.getPersistentData().getBoolean(HeavyAttackConstants.ACTIVE_TAG);
+				if (isHeavyAttack) {
+					dmzDamage *= HeavyAttackConstants.DAMAGE_MULTIPLIER;
+					staminaDamage *= HeavyAttackConstants.DAMAGE_MULTIPLIER;
+				}
+
 				DMZEvent.DamageModifyEvent modifyEvent = new DMZEvent.DamageModifyEvent(attacker, livingTarget, dmzDamage, 0.0, DMZEvent.DamageSourceType.MELEE);
 					if (MinecraftForge.EVENT_BUS.post(modifyEvent)) {
 						dmzDamage = 0.0;
@@ -236,7 +243,9 @@ public class CombatEvent {
 
 				// baseDamage is the player's full ATTACK_DAMAGE attribute total (weapon + armor + curios + potions),
 				// independent of what's held; only vanilla's unarmed baseline is netted out since DMZ's own melee stat replaces it.
-				currentDamage[0] = finalDmzDamage + Math.max(0.0, baseDamage - VANILLA_UNARMED_ATTACK_DAMAGE);
+				double vanillaEquipmentDamage = Math.max(0.0, baseDamage - VANILLA_UNARMED_ATTACK_DAMAGE);
+				if (isHeavyAttack) vanillaEquipmentDamage *= HeavyAttackConstants.DAMAGE_MULTIPLIER;
+				currentDamage[0] = finalDmzDamage + vanillaEquipmentDamage;
 
 				double normalMeleeDamage = currentDamage[0];
 				double kiWeaponBonus = 0.0;
