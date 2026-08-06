@@ -4,13 +4,17 @@ import com.dragonminez.client.animation.IPlayerAnimatable;
 import com.dragonminez.client.collision.CollisionHelper;
 import com.dragonminez.client.collision.TargetFinder;
 import com.dragonminez.client.events.DMZClientEvent;
+import com.dragonminez.client.util.KeyBinds;
 import com.dragonminez.common.combat.logic.player.PlayerAttackHelper;
 import com.dragonminez.common.combat.logic.player.PlayerAttackProperties;
 import com.dragonminez.common.combat.player.AttackHand;
+import com.dragonminez.common.combat.player.HeavyAttackConstants;
 import com.dragonminez.common.combat.util.Minecraft_DMZ;
 import com.dragonminez.common.combat.util.SoundHelper;
 import com.dragonminez.common.network.NetworkHandler;
 import com.dragonminez.common.network.C2S.CombatAttackRequestC2S;
+import com.dragonminez.common.network.C2S.HeavyAttackChargeC2S;
+import com.dragonminez.common.network.C2S.HeavyAttackRequestC2S;
 import com.dragonminez.common.stats.StatsCapability;
 import com.dragonminez.common.stats.StatsProvider;
 import net.minecraft.client.Minecraft;
@@ -51,6 +55,11 @@ public abstract class MinecraftMixin implements Minecraft_DMZ {
 	@Unique private boolean isAwaitingUpswing = false;
 	@Unique private boolean queuedAttack = false;
 	@Unique private int queuedAttackTicks = 0;
+	@Unique private boolean queuedAttackHeavy = false;
+	@Unique private boolean attackHoldPending = false;
+	@Unique private int attackHoldTicks = 0;
+	@Unique private boolean attackMustBeReleased = false;
+	@Unique private boolean activeAttackHeavy = false;
 
 	@Unique private static final float ATTACK_QUEUE_WINDOW_TICKS = 1.0F;
 	@Unique private static final int ATTACK_QUEUE_EXPIRY_TICKS = 4;
@@ -65,9 +74,10 @@ public abstract class MinecraftMixin implements Minecraft_DMZ {
 	private void dragonminez$startAttack(CallbackInfoReturnable<Boolean> cir) {
 		if (player == null || screen != null) return;
 
-		boolean[] isDmzBlocking = {false};
-		StatsProvider.get(StatsCapability.INSTANCE, player).ifPresent(data -> isDmzBlocking[0] = data.getStatus().isBlocking());
-		if (player.isBlocking() || isDmzBlocking[0] || PlayerAttackHelper.isChargingTechnique(player)) {
+		boolean[] combatRestricted = {false};
+		StatsProvider.get(StatsCapability.INSTANCE, player).ifPresent(data ->
+				combatRestricted[0] = data.getStatus().isBlocking() || data.getStatus().isStunned());
+		if (player.isBlocking() || combatRestricted[0] || PlayerAttackHelper.isChargingTechnique(player)) {
 			cir.cancel();
 			cir.setReturnValue(false);
 			return;
@@ -83,35 +93,55 @@ public abstract class MinecraftMixin implements Minecraft_DMZ {
 		cir.cancel();
 		cir.setReturnValue(false);
 
-		if (itemUseCooldown > 0 || isAttacking || isAwaitingUpswing) return;
+		if (attackMustBeReleased || attackHoldPending || itemUseCooldown > 0 || isAttacking || isAwaitingUpswing) return;
+
+		attackHoldPending = true;
+		attackHoldTicks = 0;
+		NetworkHandler.sendToServer(new HeavyAttackChargeC2S(true));
+	}
+
+	@Unique
+	private boolean beginCombatAttack(boolean heavyAttack) {
+		var comboCount = getComboCount();
+		var hand = heavyAttack
+				? PlayerAttackHelper.getHeavyAttack(player)
+				: PlayerAttackHelper.getCurrentAttack(player, comboCount);
+		if (hand == null || !PlayerAttackHelper.canAttack(player) || !shouldUseCombatAttack(hand)) return false;
+		if (itemUseCooldown > 0 || isAttacking || isAwaitingUpswing) return false;
 
 		float cooldownProgress = player.getAttackStrengthScale(0.5F);
 		if (cooldownProgress < 1.0F) {
 			float remainingTicks = (1.0F - cooldownProgress) * player.getCurrentItemAttackStrengthDelay();
 			if (remainingTicks <= ATTACK_QUEUE_WINDOW_TICKS) {
 				queuedAttack = true;
+				queuedAttackHeavy = heavyAttack;
 				queuedAttackTicks = 0;
+				return true;
 			}
-			return;
+			return false;
 		}
-		queuedAttack = false;
 
+		queuedAttack = false;
+		queuedAttackHeavy = false;
 		isAttacking = true;
 		isAwaitingUpswing = true;
+		activeAttackHeavy = heavyAttack;
 		upswingStack = hand;
+		((PlayerAttackProperties) player).setHeavyAttack(heavyAttack);
 
 		float cooldownTicks = PlayerAttackHelper.getAttackCooldownTicksCapped(player);
-		int swingAnimTicks = meleeAnimTicks(meleeAnimSpeed(cooldownTicks));
+		float animSpeed = meleeAnimSpeed(cooldownTicks);
+		if (heavyAttack) animSpeed *= HeavyAttackConstants.ANIMATION_SPEED_MULTIPLIER;
+		int swingAnimTicks = meleeAnimTicks(animSpeed);
 		upswingTicks = Math.max(1, Math.round(swingAnimTicks * (float) hand.upswingRate() * UPSWING_IMPACT_BIAS));
 		lastSwingDuration = swingAnimTicks;
 		lastAttacked = 0;
 
 		((MinecraftAccessor) this).setAttackCooldown(10000);
 
-		var event = new DMZClientEvent.PlayerAttackStart(player, hand);
-		MinecraftForge.EVENT_BUS.post(event);
-
-		playLocalAttackFeedback(hand);
+		MinecraftForge.EVENT_BUS.post(new DMZClientEvent.PlayerAttackStart(player, hand));
+		playLocalAttackFeedback(hand, heavyAttack);
+		return true;
 	}
 
 	@Unique
@@ -126,10 +156,11 @@ public abstract class MinecraftMixin implements Minecraft_DMZ {
 	}
 
 	@Unique
-	private void playLocalAttackFeedback(AttackHand hand) {
+	private void playLocalAttackFeedback(AttackHand hand, boolean heavyAttack) {
 		if (hand.attack() == null) return;
 
 		float animSpeedMultiplier = meleeAnimSpeed(PlayerAttackHelper.getAttackCooldownTicksCapped(player));
+		if (heavyAttack) animSpeedMultiplier *= HeavyAttackConstants.ANIMATION_SPEED_MULTIPLIER;
 
 		((IPlayerAnimatable) player).dragonminez$playMeleeAnimation(hand.attack().animation(), hand.isOffHand(), animSpeedMultiplier);
 
@@ -142,7 +173,42 @@ public abstract class MinecraftMixin implements Minecraft_DMZ {
 
 	@Inject(method = "continueAttack", at = @At("HEAD"), cancellable = true)
 	private void dragonminez$continueAttack(boolean leftClick, CallbackInfo ci) {
-		if (!leftClick || player == null) return;
+		if (player == null) return;
+
+		if (attackHoldPending) {
+			if (isAttackRestricted()) {
+				cancelAttackCharge();
+				if (leftClick) ci.cancel();
+				return;
+			}
+
+			if (!leftClick) {
+				attackHoldPending = false;
+				attackHoldTicks = 0;
+				NetworkHandler.sendToServer(new HeavyAttackChargeC2S(false));
+				beginCombatAttack(false);
+				return;
+			}
+
+			ci.cancel();
+			attackHoldTicks++;
+			if (attackHoldTicks >= HeavyAttackConstants.CHARGE_TICKS) {
+				attackHoldPending = false;
+				attackMustBeReleased = true;
+				if (!beginCombatAttack(true)) {
+					NetworkHandler.sendToServer(new HeavyAttackChargeC2S(false));
+				}
+			}
+			return;
+		}
+
+		if (attackMustBeReleased) {
+			if (!leftClick) attackMustBeReleased = false;
+			else ci.cancel();
+			return;
+		}
+
+		if (!leftClick) return;
 
 		if (PlayerAttackHelper.isChargingTechnique(player)) {
 			ci.cancel();
@@ -162,8 +228,27 @@ public abstract class MinecraftMixin implements Minecraft_DMZ {
 
 		if (player.tickCount - lastBlockMineTick <= BLOCK_MINE_ATTACK_GRACE) return;
 
-		float cooldownProgress = player.getAttackStrengthScale(0.5F);
-		if (cooldownProgress >= 1.0F && !isAttacking && !isAwaitingUpswing) this.startAttack();
+		// A new attack begins only from startAttack's physical press edge. Holding
+		// the mouse no longer repeats light attacks.
+	}
+
+	@Unique
+	private boolean isAttackRestricted() {
+		boolean[] restrictedByStats = {false};
+		StatsProvider.get(StatsCapability.INSTANCE, player).ifPresent(data ->
+				restrictedByStats[0] = data.getStatus().isBlocking() || data.getStatus().isStunned());
+		return KeyBinds.BLOCK_KEY.isDown() || player.isBlocking() || restrictedByStats[0]
+				|| PlayerAttackHelper.isChargingTechnique(player) || screen != null;
+	}
+
+	@Unique
+	private void cancelAttackCharge() {
+		if (attackHoldPending || activeAttackHeavy || queuedAttackHeavy) {
+			NetworkHandler.sendToServer(new HeavyAttackChargeC2S(false));
+		}
+		attackHoldPending = false;
+		attackHoldTicks = 0;
+		attackMustBeReleased = false;
 	}
 
 	@Inject(method = "tick", at = @At("HEAD"))
@@ -193,16 +278,27 @@ public abstract class MinecraftMixin implements Minecraft_DMZ {
 	private void fireQueuedAttackIfReady() {
 		if (!queuedAttack) return;
 		if (isAttacking || isAwaitingUpswing) {
+			if (queuedAttackHeavy) NetworkHandler.sendToServer(new HeavyAttackChargeC2S(false));
 			queuedAttack = false;
+			queuedAttackHeavy = false;
+			queuedAttackTicks = 0;
 			return;
 		}
 		if (++queuedAttackTicks > ATTACK_QUEUE_EXPIRY_TICKS) {
+			if (queuedAttackHeavy) NetworkHandler.sendToServer(new HeavyAttackChargeC2S(false));
 			queuedAttack = false;
+			queuedAttackHeavy = false;
+			queuedAttackTicks = 0;
 			return;
 		}
 		if (screen != null || player.getAttackStrengthScale(0.5F) < 1.0F) return;
+		boolean heavyAttack = queuedAttackHeavy;
 		queuedAttack = false;
-		this.startAttack();
+		queuedAttackHeavy = false;
+		queuedAttackTicks = 0;
+		if (!beginCombatAttack(heavyAttack) && heavyAttack) {
+			NetworkHandler.sendToServer(new HeavyAttackChargeC2S(false));
+		}
 	}
 
 	@Unique
@@ -234,20 +330,26 @@ public abstract class MinecraftMixin implements Minecraft_DMZ {
 		boolean sneaking = player.hasPose(Pose.CROUCHING);
 		int slot = player.getInventory().selected;
 
-		NetworkHandler.sendToServer(new CombatAttackRequestC2S(comboCount, sneaking, slot, entityIds));
-
-		int nextComboCount = comboCount + 1;
-		((PlayerAttackProperties) player).setComboCount(nextComboCount);
+		if (activeAttackHeavy) {
+			NetworkHandler.sendToServer(new HeavyAttackRequestC2S(comboCount, sneaking, slot, entityIds));
+			((PlayerAttackProperties) player).setComboCount(0);
+		} else {
+			NetworkHandler.sendToServer(new CombatAttackRequestC2S(comboCount, sneaking, slot, entityIds));
+			((PlayerAttackProperties) player).setComboCount(comboCount + 1);
+		}
 
 		player.resetAttackStrengthTicker();
-		setMiningCooldown(Math.max(2, Math.round(PlayerAttackHelper.getAttackCooldownTicksCapped(player))));
+		float cooldownMultiplier = activeAttackHeavy ? (float) HeavyAttackConstants.COOLDOWN_MULTIPLIER : 1.0F;
+		setMiningCooldown(Math.max(2, Math.round(PlayerAttackHelper.getAttackCooldownTicksCapped(player) * cooldownMultiplier)));
+		((PlayerAttackProperties) player).setHeavyAttack(false);
+		activeAttackHeavy = false;
 	}
 
 	@Unique
 	private void evaluateTargetsInReach() {
 		var mcDMZ = (Minecraft_DMZ) this;
 		var comboCount = mcDMZ.getComboCount();
-		var hand = PlayerAttackHelper.getCurrentAttack(player, comboCount);
+		var hand = upswingStack != null ? upswingStack : PlayerAttackHelper.getCurrentAttack(player, comboCount);
 		if (hand == null) {
 			targetsInReach = null;
 			return;
@@ -319,11 +421,15 @@ public abstract class MinecraftMixin implements Minecraft_DMZ {
 
 	@Override
 	public void cancelUpswing() {
+		cancelAttackCharge();
 		upswingStack = null;
 		queuedAttack = false;
+		queuedAttackHeavy = false;
 		itemUseCooldown = 0;
 		setMiningCooldown(0);
 		isAwaitingUpswing = false;
 		isAttacking = false;
+		activeAttackHeavy = false;
+		if (player != null) ((PlayerAttackProperties) player).setHeavyAttack(false);
 	}
 }

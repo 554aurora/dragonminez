@@ -27,6 +27,8 @@ import com.dragonminez.common.stats.StatsProvider;
 public abstract class PlayerMixin implements Player_DMZ, PlayerAttackProperties {
 	@Unique
 	private int comboCount = 0;
+	@Unique
+	private boolean dragonminez$heavyAttack = false;
 	private AttackHand lastAttack = null;
 	@Unique
 	private int dragonminez$critTick = -1;
@@ -41,6 +43,16 @@ public abstract class PlayerMixin implements Player_DMZ, PlayerAttackProperties 
 	@Override
 	public void setComboCount(int comboCount) {
 		this.comboCount = comboCount;
+	}
+
+	@Override
+	public boolean isHeavyAttack() {
+		return this.dragonminez$heavyAttack;
+	}
+
+	@Override
+	public void setHeavyAttack(boolean heavyAttack) {
+		this.dragonminez$heavyAttack = heavyAttack;
 	}
 
 	@ModifyVariable(method = "attack", at = @At("STORE"), ordinal = 0)
@@ -62,7 +74,9 @@ public abstract class PlayerMixin implements Player_DMZ, PlayerAttackProperties 
 	@Redirect(method = "attack", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/player/Player;getMainHandItem()Lnet/minecraft/world/item/ItemStack;"))
 	public ItemStack dragonminez$getMainHandItem_Redirect(Player instance) {
 		if (this.comboCount < 0) return instance.getMainHandItem();
-		AttackHand hand = PlayerAttackHelper.getCurrentAttack(instance, this.comboCount);
+		AttackHand hand = this.dragonminez$heavyAttack
+				? PlayerAttackHelper.getHeavyAttack(instance)
+				: PlayerAttackHelper.getCurrentAttack(instance, this.comboCount);
 		if (hand == null) return instance.getMainHandItem();
 
 		this.lastAttack = hand;
@@ -74,7 +88,11 @@ public abstract class PlayerMixin implements Player_DMZ, PlayerAttackProperties 
 		if (this.comboCount < 0) instance.setItemInHand(handArg, itemStack);
 
 		AttackHand hand = this.lastAttack;
-		if (hand == null) hand = PlayerAttackHelper.getCurrentAttack(instance, this.comboCount);
+		if (hand == null) {
+			hand = this.dragonminez$heavyAttack
+					? PlayerAttackHelper.getHeavyAttack(instance)
+					: PlayerAttackHelper.getCurrentAttack(instance, this.comboCount);
+		}
 
 		if (hand == null) {
 			instance.setItemInHand(handArg, itemStack);
@@ -89,7 +107,10 @@ public abstract class PlayerMixin implements Player_DMZ, PlayerAttackProperties 
 	@Override
 	public AttackHand getCurrentAttack() {
 		if (this.comboCount < 0) return null;
-		return PlayerAttackHelper.getCurrentAttack((Player)(Object)this, this.comboCount);
+		Player player = (Player) (Object) this;
+		return this.dragonminez$heavyAttack
+				? PlayerAttackHelper.getHeavyAttack(player)
+				: PlayerAttackHelper.getCurrentAttack(player, this.comboCount);
 	}
 
 	@Override

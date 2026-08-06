@@ -515,6 +515,19 @@ public class NetworkHandler {
 				.encoder(KnockbackFlightS2C::encode)
 				.consumerMainThread(KnockbackFlightS2C::handle)
 				.add();
+
+		// New combat packets are appended to preserve every existing wire id.
+		net.messageBuilder(HeavyAttackChargeC2S.class, id(), NetworkDirection.PLAY_TO_SERVER)
+				.decoder(HeavyAttackChargeC2S::new)
+				.encoder(HeavyAttackChargeC2S::encode)
+				.consumerMainThread(HeavyAttackChargeC2S::handle)
+				.add();
+
+		net.messageBuilder(HeavyAttackRequestC2S.class, id(), NetworkDirection.PLAY_TO_SERVER)
+				.decoder(HeavyAttackRequestC2S::new)
+				.encoder(HeavyAttackRequestC2S::encode)
+				.consumerMainThread(HeavyAttackRequestC2S::handle)
+				.add();
 	}
 
 	public static <MSG> void sendToServer(MSG message) {
