@@ -62,3 +62,5 @@ jobs:
           path: ${{ steps.artifact.outputs.jar }}
           if-no-files-found: error
           retention-days: 7
+
+# Actions enabled; push refresh requested on 2026-08-07.
