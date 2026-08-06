@@ -17,6 +17,7 @@ import com.dragonminez.common.stats.character.Character;
 import com.dragonminez.common.stats.extras.DynamicGrowthData;
 import com.dragonminez.common.stats.skills.Skills;
 import com.dragonminez.common.stats.techniques.Techniques;
+import com.dragonminez.common.stats.techniques.PredefinedTechniques;
 import com.dragonminez.common.util.TransformationsHelper;
 import com.dragonminez.common.util.lists.StackForms;
 import com.dragonminez.server.util.GravityLogic;
@@ -1124,6 +1125,7 @@ public class StatsData {
 		resources.setPowerRelease(0);
 		resources.setAlignment(100);
 		character.setSelectedFormGroup(TransformationsHelper.getGroupWithFirstAvailableForm(this));
+		PredefinedTechniques.ensureBaseCombatTechniques(techniques);
 
 		updateTransformationSkillLimits(raceName);
 	}
@@ -1613,6 +1615,7 @@ public class StatsData {
 				"Please update the mod or re-generate your config files.");
 		if (nbt.contains("BonusStats")) bonusStats.load(nbt.getCompound("BonusStats"));
 		if (nbt.contains("Techniques")) techniques.load(nbt.getCompound("Techniques"));
+		if (status.isHasCreatedCharacter()) PredefinedTechniques.ensureBaseCombatTechniques(techniques);
 		if (nbt.contains("DynamicGrowth")) dynamicGrowth.load(nbt.getCompound("DynamicGrowth"));
 		if (nbt.contains("HasInitializedHealth")) hasInitializedHealth = nbt.getBoolean("HasInitializedHealth");
 		if (character.getRaceName() != null && !character.getRaceName().isEmpty()) updateTransformationSkillLimits(character.getRaceName());
@@ -1631,6 +1634,7 @@ public class StatsData {
 		this.playerQuestData.deserializeNBT(other.playerQuestData.serializeNBT());
 		this.bonusStats.copyFrom(other.bonusStats);
 		this.techniques.copyFrom(other.techniques);
+		if (status.isHasCreatedCharacter()) PredefinedTechniques.ensureBaseCombatTechniques(techniques);
 		this.dynamicGrowth.copyFrom(other.dynamicGrowth);
 		this.hasInitializedHealth = other.hasInitializedHealth;
 		if (character.getRaceName() != null && !character.getRaceName().isEmpty())
