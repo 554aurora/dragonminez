@@ -117,6 +117,24 @@ public class PlayerAttackHelper {
         return null;
     }
 
+	/**
+	 * Selects the strongest valid finisher from the active weapon/form combo.
+	 * Heavy attacks always use the main hand so their animation and damage stay
+	 * deterministic between the client and server.
+	 */
+	@Nullable
+	public static AttackHand getHeavyAttack(Player player) {
+		var itemStack = player.getMainHandItem();
+		WeaponAttributes attributes = itemStack.isEmpty()
+				? resolveEmptyHandAttributes(player)
+				: WeaponRegistry.getAttributes(itemStack);
+
+		if (attributes == null || attributes.attacks() == null) return null;
+		var selection = selectHeavyAttack(attributes, player);
+		if (selection == null) return null;
+		return new AttackHand(selection.attack, selection.comboState, false, attributes, itemStack);
+	}
+
     private record AttackSelection(WeaponAttributes.Attack attack, ComboState comboState) { }
 
     @Nullable
@@ -133,6 +151,17 @@ public class PlayerAttackHelper {
         int index = comboCount % attacks.length;
         return new AttackSelection(attacks[index], new ComboState(index + 1, attacks.length));
     }
+
+	@Nullable
+	private static AttackSelection selectHeavyAttack(WeaponAttributes attributes, Player player) {
+		var attacks = Arrays.stream(attributes.attacks())
+				.filter(attack -> attack.conditions() == null || attack.conditions().length == 0
+						|| evaluateConditions(attack.conditions(), player, false))
+				.toArray(WeaponAttributes.Attack[]::new);
+		if (attacks.length == 0) return null;
+		int index = attacks.length - 1;
+		return new AttackSelection(attacks[index], new ComboState(index + 1, attacks.length));
+	}
 
     private static boolean evaluateConditions(String[] conditions, Player player, boolean isOffHandAttack) {
         return Arrays.stream(conditions).allMatch(condition -> evaluateCondition(condition, player, isOffHandAttack));
