@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.aurora.dmzcombataddon.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "dmzcombataddon.refmap.json",
+  "priority": 2000,
+  "mixins": [
+    "common.PredefinedTechniquesMixin",
+    "common.StrikeAttackHandlerMixin"
+  ],
+  "client": [
+    "client.MinecraftCombatMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
