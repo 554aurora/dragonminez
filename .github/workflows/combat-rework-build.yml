@@ -3,6 +3,7 @@ name: Combat Rework Build Artifact
 on:
   push:
     branches:
+      - main
       - agent/combat-rework
   pull_request:
     branches:
