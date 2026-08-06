@@ -61,6 +61,9 @@ public class StrikeAttackHandler {
 	private static final long RECENT_HIT_WINDOW_MS = 10_000L;
 	private static final String STRIKE_HIT_ANIM = "base.flyback";
 	private static final String STRIKE_KNOCKBACK_ANIM = "base.flyback";
+	private static final String GRAB_TECHNIQUE_ID = "grab";
+	private static final String GRABBED_ANIMATION = "skp.grabbed";
+	private static final int GRAB_THROW_TICK = 28;
 
 	private static final Map<UUID, PendingStrike> PENDING = new HashMap<>();
 	private static final Map<UUID, ActiveStrike> ACTIVE = new HashMap<>();
@@ -220,6 +223,11 @@ public class StrikeAttackHandler {
 
 		if (target == null || !target.isAlive() || !player.isAlive()) {
 			endStrike(player, target, active);
+			return;
+		}
+
+		if (GRAB_TECHNIQUE_ID.equals(active.techniqueId())) {
+			processGrab(player, target, active);
 			return;
 		}
 
@@ -738,6 +746,47 @@ public class StrikeAttackHandler {
 		ACTIVE.put(player.getUUID(), active.withTicksElapsed(nextTick));
 	}
 
+	private static void processGrab(ServerPlayer player, LivingEntity target, ActiveStrike active) {
+		int nextTick = active.ticksElapsed() + 1;
+		player.invulnerableTime = 20;
+		freezeEntity(player);
+
+		if (nextTick < GRAB_THROW_TICK) {
+			holdTargetByHead(player, target);
+		} else if (nextTick == GRAB_THROW_TICK) {
+			applyStrikeDamage(player, target, active.totalDamage(), active.techniqueId(), true);
+			grantKillXpIfNeeded(player, target, active.techniqueId());
+			ScaledLaunchHelper.launch(player, target, active.totalDamage());
+			playStrikeKnockbackAnimation(target);
+			player.level().playSound(null, target.getX(), target.getY(), target.getZ(),
+					MainSounds.CRITICO2.get(), net.minecraft.sounds.SoundSource.PLAYERS, 2.0F, 0.8F);
+			MomentumImpactHandler.registerCollisionImpact(target,
+					target.onGround() ? MomentumImpactHandler.CollisionImpactType.GROUND
+							: MomentumImpactHandler.CollisionImpactType.WALL,
+					(float) (active.totalDamage() * IMPACT_DAMAGE_RATIO), player.getLookAngle());
+		}
+
+		if (nextTick >= active.durationTicks()) {
+			endStrike(player, target, active);
+			return;
+		}
+		ACTIVE.put(player.getUUID(), active.withTicksElapsed(nextTick));
+	}
+
+	private static void holdTargetByHead(ServerPlayer player, LivingEntity target) {
+		Vec3 look = Vec3.directionFromRotation(0.0F, player.getYRot()).normalize();
+		Vec3 right = new Vec3(-look.z, 0.0D, look.x);
+		Vec3 grabbedHead = player.getEyePosition()
+				.add(look.scale(0.72D))
+				.add(right.scale(0.10D))
+				.add(0.0D, 0.12D, 0.0D);
+		double targetY = grabbedHead.y - target.getEyeHeight();
+		target.teleportTo(grabbedHead.x, targetY, grabbedHead.z);
+		target.setYRot(player.getYRot() + 180.0F);
+		target.setYHeadRot(target.getYRot());
+		freezeEntity(target);
+	}
+
 	private static void startStrike(ServerPlayer player, LivingEntity target, PendingStrike pending) {
 		StatsProvider.get(StatsCapability.INSTANCE, player).ifPresent(stats -> {
 			TechniqueData tech = stats.getTechniques().getUnlockedTechniques().get(pending.techniqueId());
@@ -779,7 +828,9 @@ public class StrikeAttackHandler {
 			MinecraftForge.EVENT_BUS.post(
 					new DMZEvent.StrikeAttackFireEvent(player, stats, strike, target));
 
-			applyStrikeDamage(player, target, perHitDamage, pending.techniqueId(), false);
+			if (!GRAB_TECHNIQUE_ID.equals(pending.techniqueId())) {
+				applyStrikeDamage(player, target, perHitDamage, pending.techniqueId(), false);
+			}
 			//teleportToTargetFront(player, target);
 			setStrikeLocked(player, true);
 			setStrikeLocked(target, true);
@@ -798,6 +849,9 @@ public class StrikeAttackHandler {
 				faceEntity(targetPlayer, player);
 			}
 			playStrikeAnimation(player, pending.animationId());
+			if (GRAB_TECHNIQUE_ID.equals(pending.techniqueId())) {
+				playVictimAnimation(target, GRABBED_ANIMATION);
+			}
 		});
 	}
 
@@ -1264,6 +1318,14 @@ public class StrikeAttackHandler {
 		if (!(target instanceof ServerPlayer serverPlayer)) return;
 		NetworkHandler.sendToTrackingEntityAndSelf(
 				new TriggerAnimationS2C(serverPlayer.getUUID(), TriggerAnimationS2C.AnimationType.KI_ANIMATION, 0, -1, STRIKE_KNOCKBACK_ANIM),
+				serverPlayer
+		);
+	}
+
+	private static void playVictimAnimation(LivingEntity target, String animationId) {
+		if (!(target instanceof ServerPlayer serverPlayer)) return;
+		NetworkHandler.sendToTrackingEntityAndSelf(
+				new TriggerAnimationS2C(serverPlayer.getUUID(), TriggerAnimationS2C.AnimationType.KI_ANIMATION, 0, -1, animationId),
 				serverPlayer
 		);
 	}
