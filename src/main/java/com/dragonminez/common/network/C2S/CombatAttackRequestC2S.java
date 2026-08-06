@@ -6,11 +6,13 @@ import com.dragonminez.common.combat.logic.knockback.ConfigurableKnockback;
 import com.dragonminez.common.combat.logic.player.PlayerAttackHelper;
 import com.dragonminez.common.combat.logic.player.PlayerAttackProperties;
 import com.dragonminez.common.combat.logic.player.TargetHelper;
+import com.dragonminez.common.combat.player.HeavyAttackConstants;
 import com.dragonminez.common.combat.util.SoundHelper;
 import com.dragonminez.common.network.NetworkHandler;
 import com.dragonminez.common.network.S2C.MeleeAnimationS2C;
 import com.dragonminez.common.stats.StatsCapability;
 import com.dragonminez.common.stats.StatsProvider;
+import com.dragonminez.server.events.players.combat.ScaledLaunchHelper;
 import lombok.Getter;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerLevel;
@@ -91,6 +93,10 @@ public class CombatAttackRequestC2S {
 	private static final int ATTACK_RATE_TOLERANCE_TICKS = 2;
 
 	public static void processAttackRequest(ServerPlayer player, CombatAttackRequestC2S request) {
+		processAttackRequest(player, request, false);
+	}
+
+	public static void processAttackRequest(ServerPlayer player, CombatAttackRequestC2S request, boolean heavyAttack) {
 		player.server.execute(() -> {
 			int comboCount = request.getComboCount();
 			int selectedSlot = request.getSelectedSlot();
@@ -103,15 +109,22 @@ public class CombatAttackRequestC2S {
 
 			long gameTime = player.level().getGameTime();
 			long lastAttackTime = player.getPersistentData().getLong(LAST_MELEE_ATTACK_TIME_TAG);
-			int minInterval = Math.max(0, (int) Math.floor(player.getCurrentItemAttackStrengthDelay()) - ATTACK_RATE_TOLERANCE_TICKS);
+			double cooldownMultiplier = heavyAttack ? HeavyAttackConstants.COOLDOWN_MULTIPLIER : 1.0D;
+			int minInterval = Math.max(0, (int) Math.floor(
+					player.getCurrentItemAttackStrengthDelay() * cooldownMultiplier) - ATTACK_RATE_TOLERANCE_TICKS);
 			if (lastAttackTime > 0 && gameTime - lastAttackTime < minInterval) return;
 			player.getPersistentData().putLong(LAST_MELEE_ATTACK_TIME_TAG, gameTime);
 
-			((PlayerAttackProperties) player).setComboCount(comboCount);
+			PlayerAttackProperties attackProperties = (PlayerAttackProperties) player;
+			attackProperties.setComboCount(comboCount);
+			attackProperties.setHeavyAttack(heavyAttack);
 
-			var hand = PlayerAttackHelper.getCurrentAttack(player, comboCount);
+			var hand = heavyAttack
+					? PlayerAttackHelper.getHeavyAttack(player)
+					: PlayerAttackHelper.getCurrentAttack(player, comboCount);
 			if (hand == null) {
-				((PlayerAttackProperties) player).setComboCount(-1);
+				attackProperties.setComboCount(-1);
+				attackProperties.setHeavyAttack(false);
 				return;
 			}
 
@@ -122,6 +135,7 @@ public class CombatAttackRequestC2S {
 			float cooldownTicks = PlayerAttackHelper.getAttackCooldownTicksCapped(player);
 			float animSpeedMultiplier = 12.0F / Math.max(cooldownTicks, 0.001F);
 			animSpeedMultiplier = Math.max(0.55F, Math.min(1.35F, animSpeedMultiplier));
+			if (heavyAttack) animSpeedMultiplier *= HeavyAttackConstants.ANIMATION_SPEED_MULTIPLIER;
 			String animName = hand.attack() != null ? hand.attack().animation() : "";
 			boolean isOffhand = hand.isOffHand();
 			var animPacket = new MeleeAnimationS2C(player.getId(), animName, isOffhand, animSpeedMultiplier);
@@ -169,6 +183,8 @@ public class CombatAttackRequestC2S {
 				if (!TargetHelper.canAttack(player, entity, maxRange + 4.0D)) continue;
 
 				if (player.distanceToSqr(entity) <= (maxRange * maxRange) + 16.0) {
+					LivingEntity livingTarget = entity instanceof LivingEntity living ? living : null;
+					float healthBefore = livingTarget != null ? livingTarget.getHealth() : 0.0F;
 
 					if (firstHit) {
 						player.getPersistentData().putBoolean("dmz_first_hit", true);
@@ -178,7 +194,19 @@ public class CombatAttackRequestC2S {
 					}
 
 					TargetHelper.onSuccessfulAttack(player, entity, relation);
-					player.attack(entity);
+					if (heavyAttack) player.getPersistentData().putBoolean(HeavyAttackConstants.ACTIVE_TAG, true);
+					try {
+						player.attack(entity);
+					} finally {
+						player.getPersistentData().remove(HeavyAttackConstants.ACTIVE_TAG);
+					}
+
+					if (heavyAttack && livingTarget != null && livingTarget.getHealth() < healthBefore) {
+						double launchPower = StatsProvider.get(StatsCapability.INSTANCE, player)
+								.map(data -> data.getMeleeDamage() * HeavyAttackConstants.DAMAGE_MULTIPLIER)
+								.orElse(player.getAttributeValue(Attributes.ATTACK_DAMAGE));
+						ScaledLaunchHelper.launch(player, livingTarget, launchPower);
+					}
 				}
 
 				if (entity instanceof LivingEntity livingEntity) {
@@ -187,6 +215,7 @@ public class CombatAttackRequestC2S {
 			}
 
 			player.getPersistentData().remove("dmz_first_hit");
+			player.getPersistentData().remove(HeavyAttackConstants.ACTIVE_TAG);
 			player.resetLastActionTime();
 
 			if (comboAttributes != null) player.getAttributes().removeAttributeModifiers(comboAttributes);
@@ -196,7 +225,8 @@ public class CombatAttackRequestC2S {
 				player.getAttributes().removeAttributeModifiers(sweepingModifiers);
 			}
 
-			((PlayerAttackProperties) player).setComboCount(-1);
+			attackProperties.setComboCount(-1);
+			attackProperties.setHeavyAttack(false);
 		});
 	}
 }
