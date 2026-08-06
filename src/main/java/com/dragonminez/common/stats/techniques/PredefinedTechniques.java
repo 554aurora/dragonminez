@@ -9,6 +9,7 @@ public class PredefinedTechniques {
 	public static final Map<String, KiAttackData> REGISTRY = new HashMap<>();
 	public static final Map<String, StrikeAttackData> STRIKE_REGISTRY = new HashMap<>();
 	public static final List<String> STRIKE_IDS = java.util.List.of(
+			"grab",
 			"meteor",
 			"dragon_fist",
 			"deadly_dance_vegetto",
@@ -40,6 +41,7 @@ public class PredefinedTechniques {
 		registerKi("soul_punisher", "technique.dragonminez.soul_punisher", "Gogeta", KiAttackData.KiType.MEDIUM_BALL, 3.50F, 0xFFFFFF, 0xFFFFFF, 5.0F, 0.5F, 45, "ki.kienzan");
 		registerKi("fake_moon", "technique.dragonminez.fake_moon", "Vegeta", KiAttackData.KiType.MEDIUM_BALL, 0.00F, 0xF5F3D0, 0xFFFFFF, 2.0F, 0.8F, 45, "ki.bigbang");
 		registerKi("taiyoken", "technique.dragonminez.taiyoken", "Tenshinhan", KiAttackData.KiType.SMALL_BALL, 0.00F, 0xFFFFFF, 0xFFFFFF, 1.0F, 0.1F, 45, "ki.bigbang");
+		registerStrike("skp.grab", 1.25f, 35);
 		registerStrike("skp.meteor", 1.25f, 40);
 		registerStrike("skp.dragon_fist", 2.5f, 50);
 		registerStrike("skp.deadly_dance_vegetto", 1.5f, 40);
@@ -56,6 +58,15 @@ public class PredefinedTechniques {
 
 	public static boolean isPredefinedTechnique(TechniqueData technique) {
 		return technique != null && isPredefinedTechniqueId(technique.getId());
+	}
+
+	public static void ensureBaseCombatTechniques(Techniques techniques) {
+		if (techniques == null || techniques.getUnlockedTechniques().containsKey("grab")) return;
+		StrikeAttackData template = STRIKE_REGISTRY.get("grab");
+		if (template == null) return;
+		StrikeAttackData clone = new StrikeAttackData();
+		clone.load(template.save());
+		techniques.unlockTechnique(clone);
 	}
 
 	private void registerKi(String id, String name, String author, KiAttackData.KiType type, float dmgMult, int colorIn, int colorOut, float size, float speed, int cooldownSeconds, String animPrefix) {
